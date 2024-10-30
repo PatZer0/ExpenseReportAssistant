@@ -1,5 +1,8 @@
 # ExpenseReportAssistant
 一个能帮助你自动将发票+订单截图+支付记录整理在A4纸上的小程序。
+## 效果展示
+![image](https://github.com/user-attachments/assets/5790c226-b308-4c25-8708-a29887b4e742)
+![image](https://github.com/user-attachments/assets/8313107d-f964-444b-84d8-7332a20a291f)
 
 ## 使用教程
 ### 运行环境
