@@ -8,7 +8,17 @@
 pip install pymupdf tqdm pillow
 ```
 
-### 参数输入(可选)
+### 运行程序
+在程序所在目录打开终端即可：
+```
+python assistant.py
+# 这将以本文件夹作为输入和输出路径
+```
+你也可以手动指定输入和输出文件夹：
+```
+python assistant.py --input-folder ./example --output example.pdf
+python assistant.py --input-folder D:/path/to/your/folder --output D:/path/to/your
+```
 程序可以接受以下几个参数输入：
 1. `--input-folder`或`-I`（不指定则使用当前文件夹）
    指定输入的**文件夹**。
