@@ -23,25 +23,22 @@ def log_debug(message):
         print(message)
 
 def create_collage_image(image_files, max_width, cell_height):
-    log_debug(f'Creating collage with images {image_files} (max width {max_width}, cell height {cell_height})')
+    log_debug(f'创建拼图 {image_files} (最大宽度 {max_width}, 单元高度 {cell_height})')
     images = []
     for image_file in image_files:
         try:
             img = Image.open(image_file)
-            # if img.height < img.width:
-            #     img = img.rotate(90, expand=True)
             images.append(img)
         except Exception as e:
-            print(f"Error opening image {image_file}: {e}")
+            print(f"打开图片错误 {image_file}: {e}")
 
     if len(images) == 0:
         return None
 
-    # Handle image arrangement based on the number of images
+    # 按列数设置图像大小
     num_images = len(images)
     
     if 2 <= num_images <= 4:
-        # Scale all images to the same height
         target_height = cell_height
         scaled_images = []
         total_width = 0
@@ -52,7 +49,6 @@ def create_collage_image(image_files, max_width, cell_height):
             scaled_images.append(resized_image)
             total_width += resized_image.width
 
-        # Adjust collage width to stay within max_width
         if total_width > max_width:
             scale_factor = max_width / total_width
             for i in range(len(scaled_images)):
@@ -67,8 +63,7 @@ def create_collage_image(image_files, max_width, cell_height):
             x_offset += img.width
 
     else:
-        # More than 4 images - arrange in a grid to fit within max_width
-        images_per_row = 2  # Adjust as needed
+        images_per_row = 2  
         target_height_per_image = cell_height // (num_images // images_per_row)
         scaled_images = []
         collage_height = target_height_per_image * (num_images // images_per_row)
@@ -93,13 +88,18 @@ def create_collage_image(image_files, max_width, cell_height):
 def merge_invoice_and_images_to_total_pdf(folder_path, doc):
     global folder_count
     try:
-        log_debug(f"\nProcessing folder: {folder_path}")
+        log_debug(f"\n正在处理文件夹: {folder_path}")
         files = os.listdir(folder_path)
         pdf_files = [os.path.join(folder_path, f) for f in files if f.lower().endswith('.pdf')]
         image_files = [os.path.join(folder_path, f) for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
 
-        if len(pdf_files) != 1 or len(image_files) < 2:
-            reason = f"Found {len(pdf_files)} PDFs and {len(image_files)} images."
+        # 筛选 NEWPAGE 和 NEWLINE 图片
+        newline_images = [f for f in image_files if os.path.basename(f).startswith('NEWLINE')]
+        newpage_images = [f for f in image_files if os.path.basename(f).startswith('NEWPAGE')]
+        other_images = [f for f in image_files if f not in newline_images and f not in newpage_images]
+
+        if len(pdf_files) != 1 or len(other_images) < 2:
+            reason = f"仅找到 {len(pdf_files)} 个 PDF 文件与 {len(other_images)} 个图片文件."
             ignored_folders.append((folder_path, reason))
             log_debug(f"Ignored {folder_path}: {reason}")
             return 0
@@ -108,49 +108,31 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
         invoice_doc = fitz.open(invoice_pdf_path)
         invoice_page = invoice_doc.load_page(0)
         
-        # Convert invoice PDF to image
         scale = 5
         matrix = fitz.Matrix(scale, scale)
         pix = invoice_page.get_pixmap(matrix=matrix)
         invoice_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        log_debug(f"Original invoice image size: {invoice_image.size}")
-
-        # Resize invoice to fit CONTENT_WIDTH
         scale_factor = CONTENT_WIDTH / invoice_image.width
         new_height = int(invoice_image.height * scale_factor)
         resized_invoice_image = invoice_image.resize((CONTENT_WIDTH, new_height), Image.LANCZOS)
-        log_debug(f"Resized invoice image size: {resized_invoice_image.size}")
 
-        # Calculate remaining space below the invoice
         remaining_space = CONTENT_HEIGHT - resized_invoice_image.height
-        log_debug(f"Remaining space below invoice: {remaining_space}")
+        create_new_page_for_collage = remaining_space < MIN_SPACE_FOR_COLLAGE
         
-        # Check if we need a separate page for the collage
-        if remaining_space < MIN_SPACE_FOR_COLLAGE:
-            create_new_page_for_collage = True
-            log_debug("Remaining space is insufficient; creating a new page for the collage.")
-        else:
-            create_new_page_for_collage = False
-        
-        # Create collage image
-        collage_image = create_collage_image(image_files, CONTENT_WIDTH, remaining_space if not create_new_page_for_collage else CONTENT_HEIGHT)
+        collage_image = create_collage_image(other_images, CONTENT_WIDTH, remaining_space if not create_new_page_for_collage else CONTENT_HEIGHT)
         if collage_image is None:
-            log_debug("Failed to create collage image; possibly no valid images.")
+            log_debug("没有足够的图片，无法创建拼图.")
             return 0
-        log_debug(f"Collage image size: {collage_image.size}")
 
         if create_new_page_for_collage:
-            # First page: invoice only
             merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
             merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
             output_pdf_path = os.path.join(folder_path, 'invoice_page.pdf')
             merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
             doc.insert_pdf(fitz.open(output_pdf_path))
             os.remove(output_pdf_path)
-            log_debug("Saved invoice-only page.")
 
-            # Second page: collage only, centered
             collage_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
             collage_x_offset = (A4_WIDTH - collage_image.width) // 2
             collage_y_offset = (A4_HEIGHT - collage_image.height) // 2
@@ -159,9 +141,7 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
             collage_page.save(collage_pdf_path, 'PDF', resolution=300.0)
             doc.insert_pdf(fitz.open(collage_pdf_path))
             os.remove(collage_pdf_path)
-            log_debug("Saved collage-only page.")
         else:
-            # Single page: invoice and collage combined
             merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
             merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
             collage_y_offset = MARGIN + new_height + (remaining_space - collage_image.height) // 2
@@ -170,7 +150,34 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
             merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
             doc.insert_pdf(fitz.open(output_pdf_path))
             os.remove(output_pdf_path)
-            log_debug("Saved combined invoice and collage page.")
+
+        # 处理 NEWLINE 图片
+        for newline_image_path in newline_images:
+            img = Image.open(newline_image_path)
+            scale_factor = CONTENT_WIDTH / img.width
+            resized_newline_image = img.resize((CONTENT_WIDTH, int(img.height * scale_factor)), Image.LANCZOS)
+
+            newline_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+            newline_y_offset = (A4_HEIGHT - resized_newline_image.height) // 2
+            newline_page.paste(resized_newline_image, (MARGIN, newline_y_offset))
+            newline_pdf_path = os.path.join(folder_path, 'newline_page.pdf')
+            newline_page.save(newline_pdf_path, 'PDF', resolution=300.0)
+            doc.insert_pdf(fitz.open(newline_pdf_path))
+            os.remove(newline_pdf_path)
+
+        # 处理 NEWPAGE 图片
+        for newpage_image_path in newpage_images:
+            img = Image.open(newpage_image_path)
+            scale_factor = CONTENT_WIDTH / img.width
+            resized_newpage_image = img.resize((CONTENT_WIDTH, int(img.height * scale_factor)), Image.LANCZOS)
+
+            newpage = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+            newpage_y_offset = (A4_HEIGHT - resized_newpage_image.height) // 2
+            newpage.paste(resized_newpage_image, (MARGIN, newpage_y_offset))
+            newpage_pdf_path = os.path.join(folder_path, 'newpage_image.pdf')
+            newpage.save(newpage_pdf_path, 'PDF', resolution=300.0)
+            doc.insert_pdf(fitz.open(newpage_pdf_path))
+            os.remove(newpage_pdf_path)
 
         folder_count += 1
         success_folders.append(folder_path)
@@ -178,7 +185,7 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
 
     except Exception as e:
         ignored_folders.append((folder_path, str(e)))
-        log_debug(f"Error processing folder {folder_path}: {e}")
+        log_debug(f"处理文件夹错误 {folder_path}: {e}")
         return 0
 
 def process_all_subfolders_to_total_pdf(base_folder):
