@@ -35,10 +35,10 @@ def create_collage_image(image_files, max_width, cell_height):
     if len(images) == 0:
         return None
 
-    # 按列数设置图像大小
     num_images = len(images)
-    
+
     if 2 <= num_images <= 4:
+        # 将 2 到 4 张图像按行排列
         target_height = cell_height
         scaled_images = []
         total_width = 0
@@ -63,21 +63,25 @@ def create_collage_image(image_files, max_width, cell_height):
             x_offset += img.width
 
     else:
-        images_per_row = 2  
-        target_height_per_image = cell_height // (num_images // images_per_row)
+        # 对超过 4 张的图像进行 4 列网格排列
+        images_per_row = 4
+        target_height_per_image = cell_height // (num_images // images_per_row + (1 if num_images % images_per_row != 0 else 0))
         scaled_images = []
-        collage_height = target_height_per_image * (num_images // images_per_row)
-
+        
         for img in images:
             scale_factor = target_height_per_image / img.height
             new_size = (int(img.width * scale_factor), target_height_per_image)
             scaled_images.append(img.resize(new_size, Image.LANCZOS))
 
+        # 计算拼图的总高度
+        rows_needed = (num_images + images_per_row - 1) // images_per_row
+        collage_height = target_height_per_image * rows_needed
         collage_image = Image.new('RGB', (max_width, collage_height), (255, 255, 255))
-        x_offset = y_offset = 0
 
+        # 按照 4 列的网格排布图像
+        x_offset = y_offset = 0
         for idx, img in enumerate(scaled_images):
-            if x_offset + img.width > max_width:
+            if x_offset + img.width > max_width or (idx % images_per_row == 0 and idx != 0):
                 x_offset = 0
                 y_offset += target_height_per_image
             collage_image.paste(img, (x_offset, y_offset))
@@ -188,9 +192,12 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
         log_debug(f"处理文件夹错误 {folder_path}: {e}")
         return 0
 
-def process_all_subfolders_to_total_pdf(base_folder):
+def process_all_subfolders_to_total_pdf(base_folder, output_path):
     global folder_count
     doc = fitz.open()
+
+    # 获取上级文件夹的名称
+    parent_folder_name = os.path.basename(os.path.abspath(base_folder))
 
     subfolders = [os.path.join(base_folder, subfolder) for subfolder in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, subfolder))]
 
@@ -199,29 +206,45 @@ def process_all_subfolders_to_total_pdf(base_folder):
 
     if folder_count > 0:
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        output_pdf = f'./报销单_自动生成_{folder_count}张发票_{timestamp}.pdf'
+        # 使用上级文件夹名称作为文件名前缀
+        default_output_filename = f'{parent_folder_name}_报销单_自动生成_{folder_count}张发票_{timestamp}.pdf'
+        
+        # 根据不同的output_path参数值判断保存路径
+        if os.path.isdir(output_path):
+            output_pdf = os.path.join(output_path, default_output_filename)
+        elif os.path.splitext(output_path)[1].lower() == '.pdf':
+            output_pdf = output_path
+            # 检查文件是否存在，如果存在则询问覆盖
+            if os.path.exists(output_pdf):
+                user_input = input(f"{output_pdf} 已存在，是否覆盖？ (y/n): ").strip().lower()
+                if user_input != 'y':
+                    print("操作已取消。")
+                    doc.close()
+                    return
+        else:
+            output_pdf = os.path.join('./', default_output_filename) if output_path == '' else output_path
+
         doc.save(output_pdf)
         doc.close()
         print(f"成功创建 {output_pdf}")
-    else:
-        print("没有找到有效的文件夹进行处理。")
 
-    # 输出成功与忽略的文件夹
-    print("\n处理结果:")
-    if success_folders:
-        print("成功整理的文件夹:")
-        for folder in success_folders:
-            print(f"- {folder}")
-    if ignored_folders:
-        print("被忽略的文件夹及原因:")
-        for folder, reason in ignored_folders:
-            print(f"- {folder}：{reason}")
+        # 打印被忽略的文件夹信息
+        if len(ignored_folders) > 0:
+            print("\n以下文件夹被忽略：")
+            for folder_path, reason in ignored_folders:
+                print(f"{folder_path}: {reason}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='合并发票和图片为 PDF')
-    parser.add_argument('--debug', action='store_true', help='启用调试信息')
+    parser.add_argument('--debug', '-D', action='store_true', help='启用调试信息')
+    parser.add_argument('--input-folder', '-I', type=str, default='./', help='输入文件夹路径（默认当前文件夹）')
+    parser.add_argument('--output', '-O', type=str, default='', help='输出 PDF 文件路径或文件名（默认自动生成）')
+
     args = parser.parse_args()
     debug_mode = args.debug
 
-    base_folder = './'
-    process_all_subfolders_to_total_pdf(base_folder)
+    input_folder = args.input_folder
+    output = args.output if args.output else ''
+
+    process_all_subfolders_to_total_pdf(input_folder, output)
