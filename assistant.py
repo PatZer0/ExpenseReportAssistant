@@ -3,7 +3,14 @@ from PIL import Image
 import os
 import datetime
 import argparse
+import re  # 添加正则表达式模块用于自然排序
 from tqdm import tqdm
+from prettytable import PrettyTable
+from colorama import init, Fore, Style
+from pypinyin import pinyin, Style as PinyinStyle  # 导入pypinyin库
+
+# 初始化colorama
+init()
 
 # 定义 A4 纸尺寸（300 DPI）
 A4_WIDTH = 2480  # 8.27 inches * 300 dpi
@@ -13,10 +20,33 @@ MIN_SPACE_FOR_COLLAGE = 210  # 7 cm in pixels
 
 CONTENT_WIDTH = A4_WIDTH - 2 * MARGIN  # 2244
 CONTENT_HEIGHT = A4_HEIGHT - 2 * MARGIN  # 3272
+HEIGHT_THRESHOLD = CONTENT_HEIGHT * 0.7  # 内容区域高度的70%
 
 folder_count = 0
 success_folders = []
 ignored_folders = []
+
+# 替换自然排序函数，支持中文排序
+def windows_sort_key(s):
+    """Windows文件排序的键函数，考虑中文拼音"""
+    # 首先获取拼音首字母
+    s = os.path.basename(s)
+    result = []
+    for char in s:
+        if '\u4e00' <= char <= '\u9fa5':  # 如果是中文字符
+            # 获取拼音首字母并转小写
+            py = pinyin(char, style=PinyinStyle.FIRST_LETTER)
+            if py:
+                result.append(py[0][0].lower())
+        else:
+            # 非中文字符，用自然排序处理
+            if char.isdigit():
+                # 补充零，确保数字排序正确
+                result.append(char.zfill(10))
+            else:
+                result.append(char.lower())
+    
+    return ''.join(result)
 
 def log_debug(message):
     if debug_mode:
@@ -65,27 +95,40 @@ def create_collage_image(image_files, max_width, cell_height):
     else:
         # 对超过 4 张的图像进行 4 列网格排列
         images_per_row = 4
-        target_height_per_image = cell_height // (num_images // images_per_row + (1 if num_images % images_per_row != 0 else 0))
-        scaled_images = []
+        rows_needed = (num_images + images_per_row - 1) // images_per_row
+        target_height_per_image = cell_height // rows_needed
         
+        # 缩放图像以适应网格
+        scaled_images = []
         for img in images:
             scale_factor = target_height_per_image / img.height
-            new_size = (int(img.width * scale_factor), target_height_per_image)
-            scaled_images.append(img.resize(new_size, Image.LANCZOS))
-
+            new_width = int(img.width * scale_factor)
+            new_height = target_height_per_image
+            
+            # 确保每列宽度不超过最大宽度的1/4
+            max_col_width = max_width // images_per_row
+            if new_width > max_col_width:
+                new_width = max_col_width
+                scale_factor = new_width / img.width
+                new_height = int(img.height * scale_factor)
+                
+            scaled_images.append(img.resize((new_width, new_height), Image.LANCZOS))
+        
         # 计算拼图的总高度
-        rows_needed = (num_images + images_per_row - 1) // images_per_row
-        collage_height = target_height_per_image * rows_needed
+        collage_height = rows_needed * target_height_per_image
         collage_image = Image.new('RGB', (max_width, collage_height), (255, 255, 255))
-
-        # 按照 4 列的网格排布图像
-        x_offset = y_offset = 0
+        
+        # 按照网格排布图像
         for idx, img in enumerate(scaled_images):
-            if x_offset + img.width > max_width or (idx % images_per_row == 0 and idx != 0):
-                x_offset = 0
-                y_offset += target_height_per_image
+            row = idx // images_per_row
+            col = idx % images_per_row
+            
+            # 计算每张图片在网格中的位置
+            cell_width = max_width // images_per_row
+            x_offset = col * cell_width + (cell_width - img.width) // 2  # 居中放置
+            y_offset = row * target_height_per_image + (target_height_per_image - img.height) // 2  # 居中放置
+            
             collage_image.paste(img, (x_offset, y_offset))
-            x_offset += img.width
 
     return collage_image
 
@@ -103,57 +146,82 @@ def merge_invoice_and_images_to_total_pdf(folder_path, doc):
         other_images = [f for f in image_files if f not in newline_images and f not in newpage_images]
 
         if len(pdf_files) != 1 or len(other_images) < 2:
+            # 修改存储结构，保存PDF和图片数量信息
             reason = f"仅找到 {len(pdf_files)} 个 PDF 文件与 {len(other_images)} 个图片文件."
-            ignored_folders.append((folder_path, reason))
+            ignored_folders.append((folder_path, len(pdf_files), len(other_images), reason))
             log_debug(f"Ignored {folder_path}: {reason}")
             return 0
 
         invoice_pdf_path = pdf_files[0]
         invoice_doc = fitz.open(invoice_pdf_path)
-        invoice_page = invoice_doc.load_page(0)
         
-        scale = 5
-        matrix = fitz.Matrix(scale, scale)
-        pix = invoice_page.get_pixmap(matrix=matrix)
-        invoice_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-        scale_factor = CONTENT_WIDTH / invoice_image.width
-        new_height = int(invoice_image.height * scale_factor)
-        resized_invoice_image = invoice_image.resize((CONTENT_WIDTH, new_height), Image.LANCZOS)
-
-        remaining_space = CONTENT_HEIGHT - resized_invoice_image.height
-        create_new_page_for_collage = remaining_space < MIN_SPACE_FOR_COLLAGE
+        # 检查PDF页数
+        pdf_page_count = len(invoice_doc)
         
-        collage_image = create_collage_image(other_images, CONTENT_WIDTH, remaining_space if not create_new_page_for_collage else CONTENT_HEIGHT)
-        if collage_image is None:
-            log_debug("没有足够的图片，无法创建拼图.")
-            return 0
-
-        if create_new_page_for_collage:
-            merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-            merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
-            output_pdf_path = os.path.join(folder_path, 'invoice_page.pdf')
-            merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
-            doc.insert_pdf(fitz.open(output_pdf_path))
-            os.remove(output_pdf_path)
-
-            collage_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-            collage_x_offset = (A4_WIDTH - collage_image.width) // 2
-            collage_y_offset = (A4_HEIGHT - collage_image.height) // 2
-            collage_page.paste(collage_image, (collage_x_offset, collage_y_offset))
-            collage_pdf_path = os.path.join(folder_path, 'collage_page.pdf')
-            collage_page.save(collage_pdf_path, 'PDF', resolution=300.0)
-            doc.insert_pdf(fitz.open(collage_pdf_path))
-            os.remove(collage_pdf_path)
+        if pdf_page_count > 1:
+            # 多页PDF，直接整个插入
+            log_debug(f"处理多页PDF（{pdf_page_count}页）: {invoice_pdf_path}")
+            doc.insert_pdf(invoice_doc)
+            
+            # 为多页PDF创建独立的拼图页
+            collage_image = create_collage_image(other_images, CONTENT_WIDTH, CONTENT_HEIGHT)
+            if collage_image is None:
+                log_debug("没有足够的图片，无法创建拼图.")
+            else:
+                collage_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+                collage_x_offset = (A4_WIDTH - collage_image.width) // 2
+                collage_y_offset = (A4_HEIGHT - collage_image.height) // 2
+                collage_page.paste(collage_image, (collage_x_offset, collage_y_offset))
+                collage_pdf_path = os.path.join(folder_path, 'collage_page.pdf')
+                collage_page.save(collage_pdf_path, 'PDF', resolution=300.0)
+                doc.insert_pdf(fitz.open(collage_pdf_path))
+                os.remove(collage_pdf_path)
         else:
-            merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-            merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
-            collage_y_offset = MARGIN + new_height + (remaining_space - collage_image.height) // 2
-            merged_image.paste(collage_image, (MARGIN, collage_y_offset))
-            output_pdf_path = os.path.join(folder_path, 'combined_page.pdf')
-            merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
-            doc.insert_pdf(fitz.open(output_pdf_path))
-            os.remove(output_pdf_path)
+            # 单页PDF，按原逻辑处理
+            invoice_page = invoice_doc.load_page(0)
+            
+            scale = 5
+            matrix = fitz.Matrix(scale, scale)
+            pix = invoice_page.get_pixmap(matrix=matrix)
+            invoice_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    
+            scale_factor = CONTENT_WIDTH / invoice_image.width
+            new_height = int(invoice_image.height * scale_factor)
+            resized_invoice_image = invoice_image.resize((CONTENT_WIDTH, new_height), Image.LANCZOS)
+    
+            remaining_space = CONTENT_HEIGHT - resized_invoice_image.height
+            create_new_page_for_collage = resized_invoice_image.height > HEIGHT_THRESHOLD
+            
+            collage_image = create_collage_image(other_images, CONTENT_WIDTH, remaining_space if not create_new_page_for_collage else CONTENT_HEIGHT)
+            if collage_image is None:
+                log_debug("没有足够的图片，无法创建拼图.")
+                return 0
+    
+            if create_new_page_for_collage:
+                merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+                merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
+                output_pdf_path = os.path.join(folder_path, 'invoice_page.pdf')
+                merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
+                doc.insert_pdf(fitz.open(output_pdf_path))
+                os.remove(output_pdf_path)
+    
+                collage_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+                collage_x_offset = (A4_WIDTH - collage_image.width) // 2
+                collage_y_offset = (A4_HEIGHT - collage_image.height) // 2
+                collage_page.paste(collage_image, (collage_x_offset, collage_y_offset))
+                collage_pdf_path = os.path.join(folder_path, 'collage_page.pdf')
+                collage_page.save(collage_pdf_path, 'PDF', resolution=300.0)
+                doc.insert_pdf(fitz.open(collage_pdf_path))
+                os.remove(collage_pdf_path)
+            else:
+                merged_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
+                merged_image.paste(resized_invoice_image, (MARGIN, MARGIN))
+                collage_y_offset = MARGIN + new_height + (remaining_space - collage_image.height) // 2
+                merged_image.paste(collage_image, (MARGIN, collage_y_offset))
+                output_pdf_path = os.path.join(folder_path, 'combined_page.pdf')
+                merged_image.save(output_pdf_path, 'PDF', resolution=300.0)
+                doc.insert_pdf(fitz.open(output_pdf_path))
+                os.remove(output_pdf_path)
 
         # 处理 NEWLINE 图片
         for newline_image_path in newline_images:
@@ -200,6 +268,8 @@ def process_all_subfolders_to_total_pdf(base_folder, output_path):
     parent_folder_name = os.path.basename(os.path.abspath(base_folder))
 
     subfolders = [os.path.join(base_folder, subfolder) for subfolder in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, subfolder))]
+    # 按照Windows的排序规则（包括中文拼音）对子文件夹进行排序
+    subfolders.sort(key=windows_sort_key)
 
     for subfolder_path in tqdm(subfolders, desc="正在处理文件夹"):
         merge_invoice_and_images_to_total_pdf(subfolder_path, doc)
@@ -228,11 +298,56 @@ def process_all_subfolders_to_total_pdf(base_folder, output_path):
         doc.close()
         print(f"成功创建 {output_pdf}")
 
-        # 打印被忽略的文件夹信息
+        # 使用PrettyTable重构输出被忽略的文件夹信息
         if len(ignored_folders) > 0:
             print("\n以下文件夹被忽略：")
-            for folder_path, reason in ignored_folders:
-                print(f"{folder_path}: {reason}")
+            table = PrettyTable()
+            table.field_names = ["路径", "PDF", "图片"]
+            
+            for folder_path, pdf_count, img_count, reason in ignored_folders:
+                # PDF状态：需要恰好1个PDF
+                pdf_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if pdf_count == 1 else f"{Fore.RED}X({pdf_count}){Style.RESET_ALL}"
+                
+                # 图片状态：需要至少2张图片
+                img_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if img_count >= 2 else f"{Fore.RED}X({img_count}){Style.RESET_ALL}"
+                
+                table.add_row([folder_path, pdf_status, img_status])
+            
+            print(table)
+            print(f"\n需求：每个文件夹应有1个PDF文件和至少2张图片文件")
+
+def rename_pdf_files(base_folder):
+    """根据上级文件夹名称重命名PDF文件"""
+    subfolders = [os.path.join(base_folder, subfolder) for subfolder in os.listdir(base_folder) 
+                  if os.path.isdir(os.path.join(base_folder, subfolder))]
+
+    # 按照Windows的排序规则（包括中文拼音）对子文件夹进行排序
+    subfolders.sort(key=windows_sort_key)
+    
+    renamed_count = 0
+    skipped_count = 0
+    
+    for subfolder_path in tqdm(subfolders, desc="正在重命名文件"):
+        folder_name = os.path.basename(subfolder_path)
+        pdf_files = [f for f in os.listdir(subfolder_path) if f.lower().endswith('.pdf')]
+        
+        if len(pdf_files) == 1:
+            old_path = os.path.join(subfolder_path, pdf_files[0])
+            new_name = f"{folder_name}.pdf"
+            new_path = os.path.join(subfolder_path, new_name)
+            
+            try:
+                os.rename(old_path, new_path)
+                renamed_count += 1
+                log_debug(f"已将 {old_path} 重命名为 {new_path}")
+            except Exception as e:
+                log_debug(f"重命名失败 {old_path}: {e}")
+                skipped_count += 1
+        else:
+            log_debug(f"跳过 {subfolder_path}: 找到 {len(pdf_files)} 个PDF文件(需要恰好1个)")
+            skipped_count += 1
+    
+    print(f"\n完成! 已重命名 {renamed_count} 个文件, 跳过 {skipped_count} 个文件夹")
 
 
 if __name__ == "__main__":
@@ -240,6 +355,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug', '-D', action='store_true', help='启用调试信息')
     parser.add_argument('--input-folder', '-I', type=str, default='./', help='输入文件夹路径（默认当前文件夹）')
     parser.add_argument('--output', '-O', type=str, default='', help='输出 PDF 文件路径或文件名（默认自动生成）')
+    parser.add_argument('--rename', '-R', action='store_true', help='根据上级文件夹名称重命名PDF文件')
 
     args = parser.parse_args()
     debug_mode = args.debug
@@ -247,4 +363,7 @@ if __name__ == "__main__":
     input_folder = args.input_folder
     output = args.output if args.output else ''
 
-    process_all_subfolders_to_total_pdf(input_folder, output)
+    if args.rename:
+        rename_pdf_files(input_folder)
+    else:
+        process_all_subfolders_to_total_pdf(input_folder, output)
