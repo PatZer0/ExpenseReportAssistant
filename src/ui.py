@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QListWidget, QPushButton, QFileDialog, 
@@ -7,6 +8,17 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon
 from pdf_merger import PDFMerger
+
+def resource_path(relative_path):
+    """获取资源的绝对路径，兼容开发环境和PyInstaller打包后的环境"""
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller打包后的路径
+        base_path = sys._MEIPASS
+    else:
+        # 开发环境下的路径
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    return os.path.join(base_path, relative_path)
 
 class PDFProcessThread(QThread):
     progress = pyqtSignal(str, int)  # status message, folder count
@@ -66,10 +78,12 @@ class MainWindow(QMainWindow):
         self.selected_folder = None
         self.output_file = None
         
-        # 设置窗口图标
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'icon', 'icon.ico')
+        # 设置窗口图标，使用兼容打包环境的路径
+        icon_path = resource_path(os.path.join('icon', 'icon.ico'))
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
+        else:
+            print(f"图标文件未找到: {icon_path}")
             
         self.initUI()
         
