@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QLabel, QProgressBar, QMessageBox, QTableWidget, 
                            QTableWidgetItem, QHeaderView, QStackedWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon
 from pdf_merger import PDFMerger
 
 class PDFProcessThread(QThread):
@@ -65,6 +65,12 @@ class MainWindow(QMainWindow):
         self.current_path = os.getcwd()
         self.selected_folder = None
         self.output_file = None
+        
+        # 设置窗口图标
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'icon', 'icon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
         self.initUI()
         
     def initUI(self):
@@ -371,11 +377,9 @@ class MainWindow(QMainWindow):
                 reasons = []
                 if pdf_count != 1:
                     pdf_item.setBackground(QColor(255, 200, 200))
-                    # reasons.append(f"PDF文件数量不正确({pdf_count}个)")
                     reasons.append(f"缺少PDF")
                 if img_count < 2:
                     img_item.setBackground(QColor(255, 200, 200))
-                    # reasons.append(f"图片数量不足({img_count}个)")
                     reasons.append(f"缺少图片")
                 
                 reason_item.setText("、".join(reasons))

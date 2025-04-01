@@ -1,7 +1,5 @@
 PyMuPDF>=1.18.0
 Pillow>=9.0.0
 tqdm>=4.62.0
-prettytable>=2.0.0
-colorama>=0.4.4
 pypinyin>=0.53.0
 PyQt5>=5.15.0

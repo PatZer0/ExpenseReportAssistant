@@ -3,13 +3,11 @@ import fitz  # PyMuPDF
 from PIL import Image
 import datetime
 from tqdm import tqdm
-from prettytable import PrettyTable
-from colorama import init, Fore, Style
 from file_utils import windows_sort_key, log_debug
 from collage_creator import create_collage_image
 
 # 初始化colorama
-init()
+# init()
 
 # 定义 A4 纸尺寸（300 DPI）
 A4_WIDTH = 2480  # 8.27 inches * 300 dpi
@@ -208,30 +206,30 @@ class PDFMerger:
         else:
             return os.path.join('./', default_filename) if output_path == '' else output_path
 
-    def _display_ignored_folders(self):
-        """显示被忽略的文件夹信息"""
-        if len(self.ignored_folders) > 0:
-            print("\n以下文件夹被忽略：")
-            table = PrettyTable()
-            table.field_names = ["路径", "PDF", "图片"]
+    # def _display_ignored_folders(self):
+    #     """显示被忽略的文件夹信息"""
+    #     if len(self.ignored_folders) > 0:
+    #         print("\n以下文件夹被忽略：")
+    #         table = PrettyTable()
+    #         table.field_names = ["路径", "PDF", "图片"]
             
-            for folder_data in self.ignored_folders:
-                if len(folder_data) == 4:  # 包含PDF和图片计数的情况
-                    folder_path, pdf_count, img_count, reason = folder_data
-                    # PDF状态：需要恰好1个PDF
-                    pdf_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if pdf_count == 1 else f"{Fore.RED}X({pdf_count}){Style.RESET_ALL}"
+    #         for folder_data in self.ignored_folders:
+    #             if len(folder_data) == 4:  # 包含PDF和图片计数的情况
+    #                 folder_path, pdf_count, img_count, reason = folder_data
+    #                 # PDF状态：需要恰好1个PDF
+    #                 pdf_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if pdf_count == 1 else f"{Fore.RED}X({pdf_count}){Style.RESET_ALL}"
                     
-                    # 图片状态：需要至少2张图片
-                    img_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if img_count >= 2 else f"{Fore.RED}X({img_count}){Style.RESET_ALL}"
+    #                 # 图片状态：需要至少2张图片
+    #                 img_status = f"{Fore.GREEN}√{Style.RESET_ALL}" if img_count >= 2 else f"{Fore.RED}X({img_count}){Style.RESET_ALL}"
                     
-                    table.add_row([folder_path, pdf_status, img_status])
-                else:
-                    # 处理异常情况
-                    folder_path, error = folder_data
-                    table.add_row([folder_path, f"{Fore.RED}错误{Style.RESET_ALL}", error])
+    #                 table.add_row([folder_path, pdf_status, img_status])
+    #             else:
+    #                 # 处理异常情况
+    #                 folder_path, error = folder_data
+    #                 table.add_row([folder_path, f"{Fore.RED}错误{Style.RESET_ALL}", error])
             
-            print(table)
-            print(f"\n需求：每个文件夹应有1个PDF文件和至少2张图片文件")
+    #         print(table)
+    #         print(f"\n需求：每个文件夹应有1个PDF文件和至少2张图片文件")
 
     def rename_pdf_files(self, base_folder):
         """根据上级文件夹名称重命名PDF文件"""
